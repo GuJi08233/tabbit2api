@@ -8,6 +8,7 @@ __pycache__/
 .env.*.local
 data/
 config.json
+!config.json.example
 Dockerfile.local
 docker-compose.local.yml
 logs/
