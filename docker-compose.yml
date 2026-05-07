@@ -1,0 +1,33 @@
+services:
+  tabbit2api:
+    build: .
+    container_name: tabbit2api
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8800}:8800"
+    volumes:
+      - tabbit2api_data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
+      - PYTHONUNBUFFERED=1
+    networks:
+      - tabbit2api_net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8800/v1/models')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+volumes:
+  tabbit2api_data:
+
+networks:
+  tabbit2api_net:
+    driver: bridge
