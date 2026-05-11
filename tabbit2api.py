@@ -59,12 +59,19 @@ app.include_router(admin_api.router)
 
 # ── 静态文件 & 管理面板入口 ──
 static_dir = Path(__file__).parent / "static"
-app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+if static_dir.exists() and static_dir.is_dir():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    logger.info(f"Static files mounted from: {static_dir}")
+else:
+    logger.warning(f"Static directory not found: {static_dir}")
 
 
 @app.get("/admin")
 async def admin_page():
-    return FileResponse(str(static_dir / "index.html"))
+    if static_dir.exists() and (static_dir / "index.html").exists():
+        return FileResponse(str(static_dir / "index.html"))
+    else:
+        return {"error": "Admin panel not available", "message": "Static files not found. Please check if static directory exists."}
 
 
 @app.get("/health")
