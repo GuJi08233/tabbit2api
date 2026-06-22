@@ -5,9 +5,7 @@ LABEL description="Tabbit2API - Tabbit to OpenAI/Claude Compatible API"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    TZ=Asia/Shanghai \
-    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
-    PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+    TZ=Asia/Shanghai
 
 WORKDIR /app
 
