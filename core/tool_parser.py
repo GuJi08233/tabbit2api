@@ -146,6 +146,7 @@ def parse_tool_calls(
     支持的格式:
     1. 纯 JSON: {"tool_calls":[...]}
     2. 嵌入文本中的 JSON
+    3. 转义的 JSON 字符串
 
     返回: 工具调用列表，或 None（如果没有工具调用）
     """
@@ -162,7 +163,19 @@ def parse_tool_calls(
     except json.JSONDecodeError:
         pass
 
-    # 2. 尝试在文本中查找 JSON
+    # 2. 尝试解析转义的 JSON 字符串
+    try:
+        # 处理 {"tool_calls":"[{...}]"} 的情况
+        if content.startswith('"') and content.endswith('"'):
+            unescaped = json.loads(content)
+            if isinstance(unescaped, str):
+                data = json.loads(unescaped)
+                if isinstance(data, dict) and "tool_calls" in data:
+                    return _validate_tool_calls(data["tool_calls"], valid_names or set())
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # 3. 尝试在文本中查找 JSON
     data = _find_json_in_text(content)
     if data and "tool_calls" in data:
         return _validate_tool_calls(data["tool_calls"], valid_names or set())
@@ -217,6 +230,10 @@ class OpenAIToolCallParser:
 
         # 检查是否包含工具调用特征
         if '{"tool_calls"' in self.buffer or '{"tool_calls"' in self.buffer:
+            self.tool_call_detected = True
+
+        # 检查是否有转义的 JSON（模型可能返回 JSON 字符串）
+        if '{\\"tool_calls\\"' in self.buffer or '{"tool_calls"' in self.buffer:
             self.tool_call_detected = True
 
         # 如果检测到工具调用特征，尝试解析
