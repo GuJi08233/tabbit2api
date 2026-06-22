@@ -47,6 +47,7 @@ def build_tools_prompt(tools: List[dict]) -> str:
 
 2. Do NOT include markdown code blocks, explanations, or any other text before or after the JSON.
 3. If no tool is needed, answer normally and do NOT output any JSON.
+4. When the user asks for information that requires a tool (like weather, search, calculations), you MUST use the appropriate tool. Do NOT answer from your own knowledge.
 
 Available tools:
 {chr(10).join(desc_parts)}
