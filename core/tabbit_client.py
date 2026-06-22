@@ -89,6 +89,9 @@ class TabbitClient:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
             "sec-ch-ua": '"Chromium";v="148", "Tabbit";v="148", "Not/A)Brand";v="99"',
             "sec-ch-ua-platform": '"Windows"',
+            "x-glic": "1",
+            "x-glic-chrome-version": "148.0.7778.168",
+            "x-glic-chrome-channel": "unknown",
             "x-chrome-id-consistency-request": (
                 f"version=1,client_id={self.client_id},"
                 f"device_id={self.device_id},sync_account_id={self.user_id},"

@@ -1,6 +1,7 @@
 import uuid
 import time
 import logging
+import httpx as _httpx
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -108,6 +109,80 @@ def init(config: ConfigManager, token_manager: TokenManager, log_store: LogStore
             del info["value"]
             result.append(info)
         return {"tokens": result}
+
+    @r.get("/tokens/usage", dependencies=[Depends(admin_dep)])
+    async def get_tokens_usage():
+        """查询所有 Token 的用量信息"""
+        import base64
+        tokens = _cfg.get("tokens", default=[])
+        base_url = _cfg.get("tabbit", "base_url") or "https://web.tabbit.ai"
+        results = []
+
+        for t in tokens:
+            if not t.get("enabled", True):
+                continue
+
+            token_value = t.get("value", "")
+            # 从 JWT 中提取 user_id
+            user_id = ""
+            try:
+                parts = token_value.split(".")
+                if len(parts) >= 2:
+                    payload_b64 = parts[1]
+                    padding = 4 - (len(payload_b64) % 4)
+                    if padding != 4:
+                        payload_b64 += "=" * padding
+                    import json as _json
+                    payload = _json.loads(base64.urlsafe_b64decode(payload_b64))
+                    user_id = payload.get("id", payload.get("sub", ""))
+            except Exception:
+                pass
+
+            if not user_id:
+                results.append({
+                    "token_id": t["id"],
+                    "name": t.get("name", "unknown"),
+                    "error": "无法提取 user_id"
+                })
+                continue
+
+            try:
+                async with _httpx.AsyncClient(verify=False, timeout=10) as hc:
+                    resp = await hc.get(
+                        f"{base_url}/api/commerce/quota/v1/usage",
+                        params={"user_id": user_id},
+                        headers={
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            "Origin": base_url,
+                            "Referer": f"{base_url}/member/upgrade",
+                        },
+                        cookies={
+                            "token": token_value,
+                            "managed": "tab_browser",
+                            "user_id": user_id,
+                        },
+                    )
+                    if resp.status_code == 200:
+                        usage = resp.json()
+                        results.append({
+                            "token_id": t["id"],
+                            "name": t.get("name", "unknown"),
+                            **usage,
+                        })
+                    else:
+                        results.append({
+                            "token_id": t["id"],
+                            "name": t.get("name", "unknown"),
+                            "error": f"HTTP {resp.status_code}"
+                        })
+            except Exception as e:
+                results.append({
+                    "token_id": t["id"],
+                    "name": t.get("name", "unknown"),
+                    "error": str(e)
+                })
+
+        return {"usage": results}
 
     @r.post("/tokens", dependencies=[Depends(admin_dep)])
     async def add_token(req: TokenAddRequest):
