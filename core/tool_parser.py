@@ -72,9 +72,14 @@ def _validate_tool_calls(
             continue
 
         name = tc.get("name", "")
-        if not name or (valid_names and name not in valid_names):
-            logger.warning(f"Invalid tool name: {name}")
+        if not name:
             continue
+
+        # 如果提供了 valid_names，检查工具名是否有效
+        # 如果没有提供 valid_names，接受任何工具名
+        if valid_names and name not in valid_names:
+            logger.warning(f"Tool name not in available list: {name}")
+            # 仍然接受，只是警告
 
         arguments = tc.get("arguments", {})
         if isinstance(arguments, str):
