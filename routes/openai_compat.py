@@ -12,6 +12,12 @@ from core.tabbit_client import TabbitClient, MODEL_MAP
 from core.token_manager import TokenManager
 from core.log_store import LogStore, LogEntry
 from core.config import ConfigManager
+from core.tool_parser import (
+    build_tools_prompt,
+    parse_tool_calls,
+    OpenAIToolCallParser,
+    generate_tool_call_id,
+)
 
 logger = logging.getLogger("tabbit2openai")
 
@@ -86,6 +92,8 @@ class ChatCompletionRequest(BaseModel):
     model: str = "best"
     messages: List[ChatMessage]
     stream: bool = False
+    tools: Optional[List[dict]] = None
+    tool_choice: Optional[str] = None
     max_tokens: Optional[int] = None
     temperature: Optional[float] = None
     top_p: Optional[float] = None
@@ -105,27 +113,35 @@ class SimpleChatRequest(BaseModel):
 MAX_CONTENT_LENGTH = 8000
 MAX_MESSAGES = 6
 
-def _build_content(messages: List[ChatMessage]) -> str:
+def _build_content(messages: List[ChatMessage], tools: Optional[List[dict]] = None) -> str:
     system_prompt = _cfg.get("proxy", "system_prompt") if _cfg else ""
-    
+
+    # 如果有工具，注入工具提示
+    if tools:
+        tools_prompt = build_tools_prompt(tools)
+        if system_prompt:
+            system_prompt = f"{system_prompt}\n\n{tools_prompt}"
+        else:
+            system_prompt = tools_prompt
+
     recent_messages = messages[-MAX_MESSAGES:]
-    
+
     parts = []
     if system_prompt:
         parts.append(f"[System]: {system_prompt}")
-    
+
     for m in recent_messages:
         label = {"user": "User", "assistant": "Assistant", "system": "System"}.get(
             m.role, m.role.capitalize()
         )
         parts.append(f"[{label}]: {_normalize_content(m.content)}")
-    
+
     full_content = "\n\n".join(parts) + "\n\n[Assistant]:"
-    
+
     if len(full_content) > MAX_CONTENT_LENGTH:
         logger.warning(f"Content too long ({len(full_content)} chars), truncating to {MAX_CONTENT_LENGTH}")
         full_content = full_content[:MAX_CONTENT_LENGTH]
-    
+
     return full_content
 
 
@@ -163,23 +179,49 @@ async def _get_client_and_token(authorization: str | None) -> tuple[TabbitClient
     return _fallback_clients[token], "bearer", ""
 
 
-async def _stream_handler(client, session_id, content, tabbit_model, req_model, completion_id, token_name, token_id):
+async def _stream_handler(client, session_id, content, tabbit_model, req_model, completion_id, token_name, token_id, tools=None):
     start = time.time()
     error_msg = ""
+    tool_parser = OpenAIToolCallParser(tools)
+
     try:
         yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': ''}, 'finish_reason': None}]})}\n\n"
 
         async for event in client.send_message(session_id, content, tabbit_model):
             et, ed = event["event"], event["data"]
             if et == "message_chunk" and "content" in ed:
-                chunk = {
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "choices": [{"index": 0, "delta": {"content": ed["content"]}, "finish_reason": None}],
-                }
-                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                text = ed["content"]
+
+                # 尝试检测工具调用
+                tool_calls = tool_parser.feed(text)
+
+                if tool_calls:
+                    # 检测到工具调用，发送 tool_calls 块
+                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {'tool_calls': tool_calls}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
+                    # 发送结束标记
+                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'tool_calls'}]})}\n\n"
+                    break
+                elif not tool_parser.is_buffering:
+                    # 没有工具或不在缓冲模式，直接发送文本
+                    chunk = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}],
+                    }
+                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
             elif et in ("message_finish", "finish"):
-                yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
+                # 流结束，检查是否有缓冲的工具调用
+                text_content, tool_calls = tool_parser.finish()
+                if tool_calls:
+                    # 发送工具调用
+                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {'tool_calls': tool_calls}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'tool_calls'}]})}\n\n"
+                elif text_content:
+                    # 发送剩余文本
+                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {'content': text_content}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
 
         yield "data: [DONE]\n\n"
         if token_id:
@@ -208,17 +250,19 @@ async def chat_completions(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error")
-    
+
     try:
         if isinstance(req, SimpleChatRequest):
             tabbit_model = "Default"
             content = _normalize_content(req.content)
+            tools = None
         else:
             tabbit_model = MODEL_MAP.get(req.model.lower(), "Default")
-            content = _build_content(req.messages)
+            tools = req.tools
+            content = _build_content(req.messages, tools)
     except Exception as e:
         raise HTTPException(status_code=400, detail="Invalid request format")
-    
+
     try:
         session_id = await client.create_chat_session()
     except Exception as e:
@@ -229,22 +273,68 @@ async def chat_completions(
             stream=getattr(req, 'stream', False), status="error", error=str(e)
         ))
         raise HTTPException(status_code=502, detail=f"Failed to create chat session: {e}")
-    
+
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
-    
+
     if getattr(req, 'stream', False):
         return StreamingResponse(_stream_handler(
             client, session_id, content, tabbit_model, getattr(req, 'model', 'unknown'),
-            completion_id, token_name, token_id
+            completion_id, token_name, token_id, tools
         ), media_type="text/event-stream")
-    
+
+    # 非流式处理
     start = time.time()
     full_text = ""
     error_msg = ""
+    tool_parser = OpenAIToolCallParser(tools)
+
     try:
         async for event in client.send_message(session_id, content, tabbit_model):
             if event["event"] == "message_chunk":
-                full_text += event["data"].get("content", "")
+                text = event["data"].get("content", "")
+
+                # 尝试检测工具调用
+                tool_calls = tool_parser.feed(text)
+                if tool_calls:
+                    # 检测到工具调用，直接返回
+                    if token_id:
+                        _tm.report_success(token_id)
+                    return {
+                        "id": completion_id,
+                        "object": "chat.completion",
+                        "created": int(time.time()),
+                        "model": getattr(req, 'model', 'unknown'),
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": None, "tool_calls": tool_calls}, "finish_reason": "tool_calls"}],
+                        "usage": {
+                            "prompt_tokens": len(content) // 4,
+                            "completion_tokens": len(text) // 4,
+                            "total_tokens": (len(content) + len(text)) // 4
+                        }
+                    }
+
+                full_text += text
+
+        # 流结束，检查是否有缓冲的工具调用
+        text_content, tool_calls = tool_parser.finish()
+        if tool_calls:
+            if token_id:
+                _tm.report_success(token_id)
+            return {
+                "id": completion_id,
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": getattr(req, 'model', 'unknown'),
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": None, "tool_calls": tool_calls}, "finish_reason": "tool_calls"}],
+                "usage": {
+                    "prompt_tokens": len(content) // 4,
+                    "completion_tokens": len(full_text) // 4,
+                    "total_tokens": (len(content) + len(full_text)) // 4
+                }
+            }
+
+        if text_content:
+            full_text = text_content
+
         if token_id:
             _tm.report_success(token_id)
     except Exception as e:
@@ -256,7 +346,7 @@ async def chat_completions(
             stream=False, status="error", error=error_msg
         ))
         raise HTTPException(status_code=502, detail=str(e))
-    
+
     duration = time.time() - start
     _logs.add(LogEntry(
         model=getattr(req, 'model', 'unknown'), token_name=token_name,
