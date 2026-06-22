@@ -82,7 +82,7 @@ def _validate_tool_calls(
                 arguments = json.loads(arguments)
             except json.JSONDecodeError:
                 arguments = {}
-        elif not isinstance(arguments, arguments):
+        elif not isinstance(arguments, dict):
             arguments = {}
 
         result.append(
