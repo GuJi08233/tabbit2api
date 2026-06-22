@@ -1,9 +1,7 @@
-import re
 import json
 import uuid
 import hashlib
 import base64
-import urllib.parse
 import time
 import random
 import string
@@ -13,17 +11,28 @@ from typing import AsyncGenerator, Optional
 import httpx
 
 MODEL_MAP = {
-    "best": "最佳",
+    "best": "Default",
+    "default": "Default",
     "deepseek-v4-pro": "DeepSeek-V4-Pro",
     "deepseek-v4-flash": "DeepSeek-V4-Flash",
+    "deepseek-v3.2": "DeepSeek-V3.2",
     "kimi-k2.6": "Kimi-K2.6",
+    "kimi-k2.5": "Kimi-K2.5",
     "glm-5.1": "GLM-5.1",
     "glm-5v-turbo": "GLM-5V-Turbo",
-    "deepseek-v3.2": "DeepSeek-V3.2",
+    "minimax-m3": "MiniMax-M3",
     "minimax-m2.7": "MiniMax-M2.7",
-    "doubao-seed-1.8": "Doubao-Seed-1.8",
-    "kimi-k2.5": "Kimi-K2.5",
+    "claude-opus-4.8": "Claude-Opus-4.8",
+    "claude-opus-4.7": "Claude-Opus-4.7",
+    "claude-sonnet-4.6": "Claude-Sonnet-4.6",
+    "claude-haiku-4.5": "Claude-Haiku-4.5",
+    "gpt-5.5": "GPT-5.5",
+    "gpt-5.4": "GPT-5.4",
+    "gpt-5.2-chat": "GPT-5.2-Chat",
+    "gemini-3.5-flash": "Gemini-3.5-Flash",
+    "gemini-3.1-pro": "Gemini-3.1-Pro",
     "qwen3.5-plus": "Qwen3.5-Plus",
+    "doubao-seed-1.8": "Doubao-Seed-1.8",
     "longcat-flash-chat": "LongCat-Flash-Chat",
     "longcat-flash-thinking": "LongCat-Flash-Thinking",
 }
@@ -39,7 +48,7 @@ class TabbitClient:
         self.next_auth = parts[1] if len(parts) > 1 else None
         self.device_id = parts[2] if len(parts) > 2 else str(uuid.uuid4())
         self.user_id = self._extract_user_id(self.jwt_token)
-        self.base_url = base_url or "https://web.tabbit-ai.com"
+        self.base_url = base_url or "https://web.tabbit.ai"
         self.client_id = client_id or "2dd8eb4c1ed9c344d173"
         
         self.client = httpx.AsyncClient(
@@ -75,10 +84,10 @@ class TabbitClient:
     def _generate_uuid(self) -> str:
         return str(uuid.uuid4())
 
-    def _get_headers(self, referer_path: str = "/newtab") -> dict:
+    def _get_headers(self, referer_path: str = "/panel?mode=mi&hl=zh-CN") -> dict:
         return {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
-            "sec-ch-ua": '"Tabbit Browser";v="147", "Not.A/Brand";v="8", "Chromium";v="147"',
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+            "sec-ch-ua": '"Chromium";v="148", "Tabbit";v="148", "Not/A)Brand";v="99"',
             "sec-ch-ua-platform": '"Windows"',
             "x-chrome-id-consistency-request": (
                 f"version=1,client_id={self.client_id},"
@@ -91,7 +100,7 @@ class TabbitClient:
     def _get_chat_headers(self, session_id: str) -> dict:
         trace_id = self._generate_uuid().replace('-', '')
         return {
-            **self._get_headers(f"/chat/{session_id}"),
+            **self._get_headers(f"/panel/{session_id}"),
             "Accept": "text/event-stream",
             "Content-Type": "application/json",
             "Cache-Control": "no-cache",
@@ -100,8 +109,8 @@ class TabbitClient:
             "X-Timestamp": str(int(round(time.time() * 1000))),
             "Unique-Uuid": self._generate_uuid(),
             "X-Signature": self._generate_uuid(),
-            "X-Req-Ctx": "MC4zMC4xOSgxMDAzMDAxOSk=",
-            "Baggage": "sentry-environment=production,sentry-release=ccacda6,sentry-public_key=db07c4686405ecd716b9bbca5bb95dd8,sentry-trace_id=f7baeb73b6b8428fb317bea85814703c,sentry-transaction=%2Fchat%2F%3Aid,sentry-sampled=false,sentry-sample_rand=0.2382503407033868,sentry-sample_rate=0",
+            "X-Req-Ctx": "MS4xLjM5KDEwMTAxMDM5KQ==",
+            "Baggage": "sentry-environment=production,sentry-release=c9a4661,sentry-public_key=4a5c74385c227d3ba012317b37a9e6c5,sentry-trace_id=f7baeb73b6b8428fb317bea85814703c,sentry-transaction=%2Fpanel%2F%3Aid,sentry-sampled=false,sentry-sample_rand=0.2382503407033868,sentry-sample_rate=0",
             "Sentry-Trace": f"{trace_id}-{self._generate_uuid().replace('-', '')[:16]}-0",
             "Origin": self.base_url,
         }
@@ -120,47 +129,37 @@ class TabbitClient:
     async def create_chat_session(self) -> str:
         for attempt in range(3):
             try:
-                router_state = [
-                    "",
-                    {
-                        "children": [
-                            "chat",
-                            {
-                                "children": [
-                                    ["id", "new", "d"],
-                                    {"children": ["__PAGE__", {}, None, "refetch"]},
-                                    None,
-                                    None,
-                                ]
-                            },
-                            None,
-                            None,
-                        ]
-                    },
-                    None,
-                    None,
-                ]
                 headers = {
-                    **self._get_headers("/chat/new"),
-                    "rsc": "1",
-                    "next-router-state-tree": urllib.parse.quote(json.dumps(router_state)),
+                    **self._get_headers("/panel?mode=mi&hl=zh-CN"),
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
                 }
 
-                resp = await self.client.get(
-                    f"{self.base_url}/chat/new",
-                    params={"_rsc": "auto"},
+                payload = {
+                    "entity": {
+                        "key": hashlib.md5(b"").hexdigest(),
+                        "extras": {
+                            "type": "tab",
+                            "url": f"{self.base_url}/newtab",
+                        },
+                    }
+                }
+
+                resp = await self.client.post(
+                    f"{self.base_url}/panel/session",
+                    json=payload,
                     headers=headers,
                     cookies=self._get_cookies(),
                 )
 
-                text = resp.text
-                match = re.search(
-                    r"/chat/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
-                    text,
-                )
-                if match:
-                    return match.group(1)
-                raise Exception("Failed to extract chat session_id from RSC response")
+                if resp.status_code != 200:
+                    raise Exception(f"panel/session returned {resp.status_code}: {resp.text[:200]}")
+
+                data = resp.json()
+                session_id = data.get("chat_session_id")
+                if session_id:
+                    return session_id
+                raise Exception(f"No chat_session_id in response: {resp.text[:200]}")
             except Exception as e:
                 if attempt < 2:
                     await asyncio.sleep(1 + attempt * 0.5)

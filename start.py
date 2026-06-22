@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Tabbit2API 本地启动脚本
-适用于国内版 Tabbit (web.tabbit-ai.com)
+适用于国际版 Tabbit (web.tabbit.ai)
 """
 import subprocess
 import sys
@@ -9,7 +9,7 @@ import os
 
 def main():
     print("=" * 60)
-    print("Tabbit2API - 国内版适配")
+    print("Tabbit2API - 国际版适配")
     print("=" * 60)
     print("\n确保已安装依赖：")
     print("  pip install -r requirements.txt")

@@ -185,7 +185,7 @@ def init(config: ConfigManager, token_manager: TokenManager, log_store: LogStore
         import httpx as _httpx
 
         tabbit_url = (
-            (_cfg.get("tabbit", "base_url") or "https://web.tabbit-ai.com")
+            (_cfg.get("tabbit", "base_url") or "https://web.tabbit.ai")
             + "/proxy/v0/oauth/third-party-login"
         )
         async with _httpx.AsyncClient(verify=False, timeout=15) as hc:
@@ -195,8 +195,8 @@ def init(config: ConfigManager, token_manager: TokenManager, log_store: LogStore
                 headers={
                     "Content-Type": "application/json",
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Origin": _cfg.get("tabbit", "base_url") or "https://web.tabbit-ai.com",
-                    "Referer": (_cfg.get("tabbit", "base_url") or "https://web.tabbit-ai.com") + "/login",
+                    "Origin": _cfg.get("tabbit", "base_url") or "https://web.tabbit.ai",
+                    "Referer": (_cfg.get("tabbit", "base_url") or "https://web.tabbit.ai") + "/login",
                 },
             )
 

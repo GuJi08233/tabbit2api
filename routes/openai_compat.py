@@ -211,10 +211,10 @@ async def chat_completions(
     
     try:
         if isinstance(req, SimpleChatRequest):
-            tabbit_model = "最佳"
+            tabbit_model = "Default"
             content = _normalize_content(req.content)
         else:
-            tabbit_model = MODEL_MAP.get(req.model.lower(), "最佳")
+            tabbit_model = MODEL_MAP.get(req.model.lower(), "Default")
             content = _build_content(req.messages)
     except Exception as e:
         raise HTTPException(status_code=400, detail="Invalid request format")
@@ -283,9 +283,89 @@ async def chat_completions(
 MODEL_INFO = {
     "best": {
         "id": "best",
-        "name": "最佳",
-        "description": "自动选择最优模型",
+        "name": "Default",
+        "description": "自动选择最优模型，不消耗用量",
         "max_tokens": 100000,
+        "supports_streaming": True,
+        "supports_vision": True
+    },
+    "default": {
+        "id": "default",
+        "name": "Default",
+        "description": "自动选择最优模型，不消耗用量",
+        "max_tokens": 100000,
+        "supports_streaming": True,
+        "supports_vision": True
+    },
+    "claude-opus-4.8": {
+        "id": "claude-opus-4.8",
+        "name": "Claude-Opus-4.8",
+        "description": "Anthropic 最新旗舰模型",
+        "max_tokens": 200000,
+        "supports_streaming": True,
+        "supports_vision": True
+    },
+    "claude-opus-4.7": {
+        "id": "claude-opus-4.7",
+        "name": "Claude-Opus-4.7",
+        "description": "Anthropic 高级模型",
+        "max_tokens": 200000,
+        "supports_streaming": True,
+        "supports_vision": True
+    },
+    "claude-sonnet-4.6": {
+        "id": "claude-sonnet-4.6",
+        "name": "Claude-Sonnet-4.6",
+        "description": "Anthropic 平衡模型",
+        "max_tokens": 200000,
+        "supports_streaming": True,
+        "supports_vision": True
+    },
+    "claude-haiku-4.5": {
+        "id": "claude-haiku-4.5",
+        "name": "Claude-Haiku-4.5",
+        "description": "Anthropic 快速模型",
+        "max_tokens": 200000,
+        "supports_streaming": True,
+        "supports_vision": True
+    },
+    "gpt-5.5": {
+        "id": "gpt-5.5",
+        "name": "GPT-5.5",
+        "description": "OpenAI 最新旗舰模型",
+        "max_tokens": 128000,
+        "supports_streaming": True,
+        "supports_vision": True
+    },
+    "gpt-5.4": {
+        "id": "gpt-5.4",
+        "name": "GPT-5.4",
+        "description": "OpenAI 高级模型",
+        "max_tokens": 128000,
+        "supports_streaming": True,
+        "supports_vision": True
+    },
+    "gpt-5.2-chat": {
+        "id": "gpt-5.2-chat",
+        "name": "GPT-5.2-Chat",
+        "description": "OpenAI 对话模型",
+        "max_tokens": 128000,
+        "supports_streaming": True,
+        "supports_vision": True
+    },
+    "gemini-3.5-flash": {
+        "id": "gemini-3.5-flash",
+        "name": "Gemini-3.5-Flash",
+        "description": "Google 最新快速模型",
+        "max_tokens": 128000,
+        "supports_streaming": True,
+        "supports_vision": True
+    },
+    "gemini-3.1-pro": {
+        "id": "gemini-3.1-pro",
+        "name": "Gemini-3.1-Pro",
+        "description": "Google 高级模型",
+        "max_tokens": 128000,
         "supports_streaming": True,
         "supports_vision": True
     },
@@ -309,14 +389,6 @@ MODEL_INFO = {
         "id": "glm-5.1",
         "name": "GLM-5.1",
         "description": "智谱最新文本模型",
-        "max_tokens": 128000,
-        "supports_streaming": True,
-        "supports_vision": False
-    },
-    "glm-5v-turbo": {
-        "id": "glm-5v-turbo",
-        "name": "GLM-5V-Turbo",
-        "description": "智谱最新多模态模型",
         "max_tokens": 128000,
         "supports_streaming": True,
         "supports_vision": True
@@ -343,15 +415,23 @@ MODEL_INFO = {
         "description": "DeepSeek MoE 语言模型",
         "max_tokens": 128000,
         "supports_streaming": True,
-        "supports_vision": False
+        "supports_vision": True
+    },
+    "minimax-m3": {
+        "id": "minimax-m3",
+        "name": "MiniMax-M3",
+        "description": "MiniMax 最新旗舰多模态模型",
+        "max_tokens": 128000,
+        "supports_streaming": True,
+        "supports_vision": True
     },
     "minimax-m2.7": {
         "id": "minimax-m2.7",
         "name": "MiniMax-M2.7",
-        "description": "MiniMax 最新旗舰级文本模型",
+        "description": "MiniMax 旗舰级文本模型",
         "max_tokens": 128000,
         "supports_streaming": True,
-        "supports_vision": False
+        "supports_vision": True
     },
     "qwen3.5-plus": {
         "id": "qwen3.5-plus",
@@ -375,7 +455,7 @@ MODEL_INFO = {
         "description": "美团自研旗舰模型",
         "max_tokens": 128000,
         "supports_streaming": True,
-        "supports_vision": False
+        "supports_vision": True
     },
     "longcat-flash-thinking": {
         "id": "longcat-flash-thinking",
@@ -383,7 +463,7 @@ MODEL_INFO = {
         "description": "美团自研旗舰思考模型",
         "max_tokens": 128000,
         "supports_streaming": True,
-        "supports_vision": False
+        "supports_vision": True
     }
 }
 

@@ -11,7 +11,7 @@ DEFAULT_CONFIG = {
     "server": {"host": "0.0.0.0", "port": 8800},
     "admin": {"password_hash": "", "salt": "", "jwt_secret": ""},
     "tabbit": {
-        "base_url": "https://web.tabbit-ai.com",
+        "base_url": "https://web.tabbit.ai",
         "client_id": "2dd8eb4c1ed9c344d173",
     },
     "tokens": [],

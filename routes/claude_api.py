@@ -60,12 +60,12 @@ def _resolve_tabbit_model(model: str) -> str:
     # Claude 模型名映射
     for prefix, target in CLAUDE_MODEL_MAP.items():
         if model.startswith(prefix):
-            return MODEL_MAP.get(target, "最佳")
+            return MODEL_MAP.get(target, "Default")
     # 从 config 中读取默认模型
     default = _cfg.get("claude", "default_model") if _cfg else None
     if default and default in MODEL_MAP:
         return MODEL_MAP[default]
-    return "最佳"
+    return "Default"
 
 
 async def _get_client_and_token(

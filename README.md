@@ -4,9 +4,9 @@
 [![Python](https://img.shields.io/badge/Python-3.11-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110-green.svg)](https://fastapi.tiangolo.com/)
 
-**Tabbit2API** 是一个非官方的 API 适配器，专为**国内版 Tabbit 浏览器**设计。它将 Tabbit 的内部 API 转换为与 OpenAI 和 Anthropic Claude 兼容的标准化接口。
+**Tabbit2API** 是一个非官方的 API 适配器，专为**国际版 Tabbit 浏览器**设计。它将 Tabbit 的内部 API 转换为与 OpenAI 和 Anthropic Claude 兼容的标准化接口。
 
-> **支持版本**：国内版 Tabbit (web.tabbit-ai.com)
+> **支持版本**：国际版 Tabbit (web.tabbit.ai)
 
 ## ✨ 核心功能
 
@@ -18,13 +18,24 @@
 - **Docker 部署**：提供完整的 Docker Compose 配置，支持远程服务器部署。
 - **流式与非流式**：完整支持流式（Streaming）和非流式响应。
 
+## ⚠️ Token 说明
+
+Tabbit 使用 JWT Token 认证，**有效期 7 天**，过期后需要从浏览器重新获取。
+
+**获取方法**：
+1. 用 Tabbit 浏览器访问 `https://web.tabbit.ai`
+2. 按 `F12` → `Application` → `Cookies` → 找到 `token`
+3. 复制完整的值
+
+> 也可以通过管理面板的 Google 登录功能自动获取 Token。
+
 ## 🚀 快速开始
 
 ### 方式一：Docker Compose 部署（推荐用于服务器）
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/hoinata/tabbit2api.git
+git clone https://github.com/GuJi08233/tabbit2api.git
 cd tabbit2api
 
 # 2. 复制环境变量配置（可选）
@@ -90,7 +101,7 @@ vim config.json
 |--------|------|--------|------|
 | 服务主机 | `server.host` | `0.0.0.0` | 服务监听地址 |
 | 服务端口 | `server.port` | `8800` | 服务监听端口 |
-| Tabbit 域名 | `tabbit.base_url` | `https://web.tabbit-ai.com` | 国内版域名 |
+| Tabbit 域名 | `tabbit.base_url` | `https://web.tabbit.ai` | 国际版域名 |
 | Client ID | `tabbit.client_id` | `2dd8eb4c1ed9c344d173` | 客户端标识 |
 | 代理 API Key | `proxy.api_key` | 空 | 全局 API Key（可选） |
 | 系统提示词 | `proxy.system_prompt` | 空 | 全局注入的系统提示（可选） |
@@ -280,15 +291,24 @@ curl http://localhost:8800/v1/messages \
 
 | 模型 ID | 显示名称 | 说明 |
 |---------|----------|------|
-| `best` | 最佳 | 自动选择最优模型 |
-| `kimi-k2.6` | Kimi-K2.6 | Moonshot 最新旗舰级多模态模型 |
-| `kimi-k2.5` | Kimi-K2.5 | Moonshot 旗舰级多模态模型 |
-| `glm-5.1` | GLM-5.1 | 智谱最新文本模型 |
-| `glm-5v-turbo` | GLM-5V-Turbo | 智谱最新多模态模型 |
+| `best` / `default` | Default | 自动选择最优模型，不消耗用量 |
+| `claude-opus-4.8` | Claude-Opus-4.8 | Anthropic 最新旗舰模型 |
+| `claude-opus-4.7` | Claude-Opus-4.7 | Anthropic 高级模型 |
+| `claude-sonnet-4.6` | Claude-Sonnet-4.6 | Anthropic 平衡模型 |
+| `claude-haiku-4.5` | Claude-Haiku-4.5 | Anthropic 快速模型 |
+| `gpt-5.5` | GPT-5.5 | OpenAI 最新旗舰模型 |
+| `gpt-5.4` | GPT-5.4 | OpenAI 高级模型 |
+| `gpt-5.2-chat` | GPT-5.2-Chat | OpenAI 对话模型 |
+| `gemini-3.5-flash` | Gemini-3.5-Flash | Google 最新快速模型 |
+| `gemini-3.1-pro` | Gemini-3.1-Pro | Google 高级模型 |
 | `deepseek-v4-pro` | DeepSeek-V4-Pro | DeepSeek 旗舰模型 Pro 版 |
 | `deepseek-v4-flash` | DeepSeek-V4-Flash | DeepSeek 旗舰模型 Flash 版 |
 | `deepseek-v3.2` | DeepSeek-V3.2 | DeepSeek MoE 语言模型 |
-| `minimax-m2.7` | MiniMax-M2.7 | MiniMax 最新旗舰级文本模型 |
+| `kimi-k2.6` | Kimi-K2.6 | Moonshot 最新旗舰级多模态模型 |
+| `kimi-k2.5` | Kimi-K2.5 | Moonshot 旗舰级多模态模型 |
+| `glm-5.1` | GLM-5.1 | 智谱最新文本模型 |
+| `minimax-m3` | MiniMax-M3 | MiniMax 最新旗舰多模态模型 |
+| `minimax-m2.7` | MiniMax-M2.7 | MiniMax 旗舰级文本模型 |
 | `qwen3.5-plus` | Qwen3.5-Plus | 阿里千问多模态大模型 |
 | `doubao-seed-1.8` | Doubao-Seed-1.8 | 字节跳动旗舰级多模态模型 |
 | `longcat-flash-chat` | LongCat-Flash-Chat | 美团自研旗舰模型 |
@@ -340,15 +360,24 @@ Tabbit2API 可以作为自定义模型添加到 Trae 中使用。
 
 | 模型 ID | 显示名称 | 说明 |
 |---------|----------|------|
-| `best` | 最佳 | 自动选择最优模型 |
-| `kimi-k2.6` | Kimi-K2.6 | Moonshot 最新旗舰级多模态模型 |
-| `kimi-k2.5` | Kimi-K2.5 | Moonshot 旗舰级多模态模型 |
-| `glm-5.1` | GLM-5.1 | 智谱最新文本模型 |
-| `glm-5v-turbo` | GLM-5V-Turbo | 智谱最新多模态模型 |
+| `best` / `default` | Default | 自动选择最优模型，不消耗用量 |
+| `claude-opus-4.8` | Claude-Opus-4.8 | Anthropic 最新旗舰模型 |
+| `claude-opus-4.7` | Claude-Opus-4.7 | Anthropic 高级模型 |
+| `claude-sonnet-4.6` | Claude-Sonnet-4.6 | Anthropic 平衡模型 |
+| `claude-haiku-4.5` | Claude-Haiku-4.5 | Anthropic 快速模型 |
+| `gpt-5.5` | GPT-5.5 | OpenAI 最新旗舰模型 |
+| `gpt-5.4` | GPT-5.4 | OpenAI 高级模型 |
+| `gpt-5.2-chat` | GPT-5.2-Chat | OpenAI 对话模型 |
+| `gemini-3.5-flash` | Gemini-3.5-Flash | Google 最新快速模型 |
+| `gemini-3.1-pro` | Gemini-3.1-Pro | Google 高级模型 |
 | `deepseek-v4-pro` | DeepSeek-V4-Pro | DeepSeek 旗舰模型 Pro 版 |
 | `deepseek-v4-flash` | DeepSeek-V4-Flash | DeepSeek 旗舰模型 Flash 版 |
 | `deepseek-v3.2` | DeepSeek-V3.2 | DeepSeek MoE 语言模型 |
-| `minimax-m2.7` | MiniMax-M2.7 | MiniMax 最新旗舰级文本模型 |
+| `kimi-k2.6` | Kimi-K2.6 | Moonshot 最新旗舰级多模态模型 |
+| `kimi-k2.5` | Kimi-K2.5 | Moonshot 旗舰级多模态模型 |
+| `glm-5.1` | GLM-5.1 | 智谱最新文本模型 |
+| `minimax-m3` | MiniMax-M3 | MiniMax 最新旗舰多模态模型 |
+| `minimax-m2.7` | MiniMax-M2.7 | MiniMax 旗舰级文本模型 |
 | `qwen3.5-plus` | Qwen3.5-Plus | 阿里千问多模态大模型 |
 | `doubao-seed-1.8` | Doubao-Seed-1.8 | 字节跳动旗舰级多模态模型 |
 | `longcat-flash-chat` | LongCat-Flash-Chat | 美团自研旗舰模型 |
@@ -362,7 +391,7 @@ Tabbit2API 可以作为自定义模型添加到 Trae 中使用。
 |----------|------|--------|
 | `TABBIT_SERVER_HOST` | 服务监听地址 | `0.0.0.0` |
 | `TABBIT_SERVER_PORT` | 服务监听端口 | `8800` |
-| `TABBIT_BASE_URL` | Tabbit 域名 | `https://web.tabbit-ai.com` |
+| `TABBIT_BASE_URL` | Tabbit 域名 | `https://web.tabbit.ai` |
 | `TABBIT_CLIENT_ID` | 客户端标识 | `2dd8eb4c1ed9c344d173` |
 | `TABBIT_API_KEY` | 全局 API Key | 空 |
 | `TABBIT_SYSTEM_PROMPT` | 全局系统提示词 | 空 |
@@ -383,4 +412,6 @@ Tabbit2API 可以作为自定义模型添加到 Trae 中使用。
 
 ## 🙏 参考项目
 
-本项目参考了 [hih24337/tabb2](https://github.com/hih24337/tabb2) 的设计思路和实现方式。
+- [hoinata/tabbit2api](https://github.com/hoinata/tabbit2api) — 原版项目（国内版）
+- [hih24337/tabb2](https://github.com/hih24337/tabb2) — 设计思路参考
+- [CassiopeiaCode/b4u2cc](https://github.com/CassiopeiaCode/b4u2cc) — Claude 兼容层参考

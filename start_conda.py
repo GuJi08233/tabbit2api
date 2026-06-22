@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Tabbit2API Conda 环境启动脚本
-适用于国内版 Tabbit (web.tabbit-ai.com)
+适用于国际版 Tabbit (web.tabbit.ai)
 """
 import subprocess
 import sys
