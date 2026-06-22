@@ -194,9 +194,12 @@ def init(config: ConfigManager, token_manager: TokenManager, log_store: LogStore
                 json={"id_token": req.id_token, "select_by": "btn", "type": 1},
                 headers={
                     "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
                     "Origin": _cfg.get("tabbit", "base_url") or "https://web.tabbit.ai",
                     "Referer": (_cfg.get("tabbit", "base_url") or "https://web.tabbit.ai") + "/login",
+                },
+                cookies={
+                    "managed": "tab_browser",
                 },
             )
 
