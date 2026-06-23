@@ -6,9 +6,21 @@ import time
 import random
 import string
 import asyncio
+import logging
 from typing import AsyncGenerator, Optional
 
 import httpx
+
+from core.tabbit_sign import (
+    generate_sign_headers,
+    generate_pro_uuid,
+    generate_fingerprint_headers,
+    generate_trace_id,
+    DEFAULT_SIGN_KEY,
+    hmac_sha256_hex,
+)
+
+logger = logging.getLogger("tabbit2api")
 
 MODEL_MAP = {
     "best": "Default",
@@ -42,7 +54,7 @@ class TabbitClient:
     def __init__(self, token_str: str, base_url: str | None = None, client_id: str | None = None):
         if not token_str:
             raise ValueError("token_str cannot be empty")
-        
+
         parts = token_str.split("|")
         self.jwt_token = parts[0] if parts else ""
         self.next_auth = parts[1] if len(parts) > 1 else None
@@ -50,7 +62,12 @@ class TabbitClient:
         self.user_id = self._extract_user_id(self.jwt_token)
         self.base_url = base_url or "https://web.tabbit.ai"
         self.client_id = client_id or "2dd8eb4c1ed9c344d173"
-        
+
+        # 签名 key 管理
+        self.sign_key = DEFAULT_SIGN_KEY
+        self.sign_key_fetched_at = 0
+        self.sign_key_ttl = 10 * 60 * 1000  # 10 分钟刷新一次
+
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=15, read=180, write=30, pool=30),
             follow_redirects=False,
@@ -78,6 +95,34 @@ class TabbitClient:
         except Exception:
             return str(uuid.uuid4())
 
+    async def fetch_sign_key(self) -> str:
+        """获取签名 key（逆向自 /chat/sign-key 端点）"""
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Cookie": f"token={self.jwt_token}",
+            }
+            resp = await self.client.get(
+                f"{self.base_url}/chat/sign-key",
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                key = resp.text.strip()
+                if key:
+                    self.sign_key = key
+                    self.sign_key_fetched_at = int(time.time() * 1000)
+                    return key
+        except Exception as e:
+            logger.warning(f"Failed to fetch sign key: {e}")
+        return self.sign_key
+
+    async def ensure_sign_key(self) -> str:
+        """确保签名 key 有效"""
+        now = int(time.time() * 1000)
+        if not self.sign_key or now - self.sign_key_fetched_at > self.sign_key_ttl:
+            await self.fetch_sign_key()
+        return self.sign_key
+
     def _generate_nonce(self) -> str:
         return ''.join(random.choices(string.hexdigits, k=64))
 
@@ -100,22 +145,27 @@ class TabbitClient:
             "referer": f"{self.base_url}{referer_path}",
         }
 
-    def _get_chat_headers(self, session_id: str) -> dict:
-        trace_id = self._generate_uuid().replace('-', '')
+    def _get_chat_headers(self, session_id: str, body: str = "") -> dict:
+        trace_id = generate_trace_id()
+
+        # 生成签名 headers（正确的 HMAC 签名）
+        sign_headers = generate_sign_headers(body, self.sign_key)
+
+        # 生成指纹 headers（带 Pro 标记）
+        fingerprint_headers = generate_fingerprint_headers(
+            version="1.1.39(10101039)",
+            is_pro=True  # 启用 Pro 模式
+        )
+
         return {
             **self._get_headers(f"/panel/{session_id}"),
             "Accept": "text/event-stream",
             "Content-Type": "application/json",
             "Cache-Control": "no-cache",
-            "X-Nonce": self._generate_nonce(),
-            "Trace-Id": self._generate_uuid(),
-            "X-Timestamp": str(int(round(time.time() * 1000))),
-            "Unique-Uuid": self._generate_uuid(),
-            "X-Signature": self._generate_uuid(),
-            "X-Req-Ctx": "MS4xLjM5KDEwMTAxMDM5KQ==",
-            "Baggage": "sentry-environment=production,sentry-release=c9a4661,sentry-public_key=4a5c74385c227d3ba012317b37a9e6c5,sentry-trace_id=f7baeb73b6b8428fb317bea85814703c,sentry-transaction=%2Fpanel%2F%3Aid,sentry-sampled=false,sentry-sample_rand=0.2382503407033868,sentry-sample_rate=0",
-            "Sentry-Trace": f"{trace_id}-{self._generate_uuid().replace('-', '')[:16]}-0",
+            "Trace-Id": trace_id,
             "Origin": self.base_url,
+            **sign_headers,
+            **fingerprint_headers,
         }
 
     def _get_cookies(self) -> dict:
@@ -172,6 +222,9 @@ class TabbitClient:
     async def send_message(
         self, session_id: str, content: str, model: str
     ) -> AsyncGenerator[dict, None]:
+        # 确保签名 key 有效
+        await self.ensure_sign_key()
+
         payload = {
             "chat_session_id": session_id,
             "message_id": None,
@@ -188,30 +241,41 @@ class TabbitClient:
             },
         }
 
-        headers = self._get_chat_headers(session_id)
+        # 将 payload 转换为 JSON 字符串用于签名
+        body_str = json.dumps(payload, separators=(',', ':'))
+        headers = self._get_chat_headers(session_id, body_str)
 
-        async with self.client.stream(
-            "POST",
-            f"{self.base_url}/api/v1/chat/completion",
-            json=payload,
-            headers=headers,
-            cookies=self._get_cookies(),
-        ) as resp:
-            if resp.status_code != 200:
-                body = await resp.aread()
-                raise Exception(f"Tabbit API error {resp.status_code}: {body.decode()}")
+        # 尝试请求，如果遇到 499 错误则刷新签名 key 并重试
+        for attempt in range(2):
+            async with self.client.stream(
+                "POST",
+                f"{self.base_url}/api/v1/chat/completion",
+                json=payload,
+                headers=headers,
+                cookies=self._get_cookies(),
+            ) as resp:
+                # 499 错误表示签名 key 过期，刷新后重试
+                if resp.status_code == 499 and attempt == 0:
+                    await self.fetch_sign_key()
+                    headers = self._get_chat_headers(session_id, body_str)
+                    continue
 
-            current_event = None
-            async for line in resp.aiter_lines():
-                if line.startswith("event:"):
-                    current_event = line[len("event:") :].strip()
-                elif line.startswith("data:") and current_event:
-                    data_str = line[len("data:") :].strip()
-                    try:
-                        data = json.loads(data_str)
-                        yield {"event": current_event, "data": data}
-                    except Exception:
-                        pass
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    raise Exception(f"Tabbit API error {resp.status_code}: {body.decode()}")
+
+                current_event = None
+                async for line in resp.aiter_lines():
+                    if line.startswith("event:"):
+                        current_event = line[len("event:") :].strip()
+                    elif line.startswith("data:") and current_event:
+                        data_str = line[len("data:") :].strip()
+                        try:
+                            data = json.loads(data_str)
+                            yield {"event": current_event, "data": data}
+                        except Exception:
+                            pass
+                break  # 成功，退出重试循环
 
     async def close(self):
         await self.client.aclose()
