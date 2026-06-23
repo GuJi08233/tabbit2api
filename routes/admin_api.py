@@ -12,6 +12,7 @@ from core.auth import create_jwt, verify_password, require_admin
 from core.token_manager import TokenManager
 from core.tabbit_client import TabbitClient
 from core.log_store import LogStore
+from core.tabbit_sign import generate_pro_uuid
 
 logger = logging.getLogger("tabbit2openai")
 
@@ -114,6 +115,7 @@ def init(config: ConfigManager, token_manager: TokenManager, log_store: LogStore
     async def get_tokens_usage():
         """查询所有 Token 的用量信息"""
         import base64
+        import uuid as _uuid
         tokens = _cfg.get("tokens", default=[])
         base_url = _cfg.get("tabbit", "base_url") or "https://web.tabbit.ai"
         results = []
@@ -148,18 +150,30 @@ def init(config: ConfigManager, token_manager: TokenManager, log_store: LogStore
 
             try:
                 async with _httpx.AsyncClient(verify=False, timeout=10) as hc:
+                    device_id = str(_uuid.uuid4())
+                    trace_id = str(_uuid.uuid4())
                     resp = await hc.get(
                         f"{base_url}/api/commerce/quota/v1/usage",
-                        params={"user_id": user_id},
+                        params={"user_id": user_id, "timezone": "Asia/Shanghai"},
                         headers={
-                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
                             "Origin": base_url,
                             "Referer": f"{base_url}/member/upgrade",
+                            "Accept": "*/*",
+                            "sec-ch-ua": '"Chromium";v="148", "Tabbit";v="148", "Not/A)Brand";v="99"',
+                            "sec-ch-ua-mobile": "?0",
+                            "sec-ch-ua-platform": '"Windows"',
+                            "sec-fetch-dest": "empty",
+                            "sec-fetch-mode": "cors",
+                            "sec-fetch-site": "same-origin",
+                            "unique-uuid": generate_pro_uuid(True),
+                            "x-chrome-id-consistency-request": f"version=1,client_id={_cfg.get('tabbit', 'client_id')},device_id={device_id},sync_account_id={user_id},signin_mode=all_accounts,signout_mode=show_confirmation",
                         },
                         cookies={
                             "token": token_value,
                             "managed": "tab_browser",
                             "user_id": user_id,
+                            "NEXT_LOCALE": "zh",
                         },
                     )
                     if resp.status_code == 200:
