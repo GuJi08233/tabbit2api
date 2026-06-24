@@ -1,6 +1,6 @@
 """
 工具调用解析模块
-借鉴 go-proxy 的简单 JSON 格式实现
+参考 go-proxy 的简单 JSON 格式实现
 """
 
 import json
@@ -20,7 +20,7 @@ def generate_tool_call_id() -> str:
 def build_tools_prompt(tools: List[dict]) -> str:
     """
     构建工具提示文本
-    借鉴 go-proxy 的简单 JSON 格式
+    参考 go-proxy 的简单 JSON 格式
     """
     if not tools:
         return ""
@@ -47,7 +47,6 @@ def build_tools_prompt(tools: List[dict]) -> str:
 
 2. Do NOT include markdown code blocks, explanations, or any other text before or after the JSON.
 3. If no tool is needed, answer normally and do NOT output any JSON.
-4. When the user asks for information that requires a tool (like weather, search, calculations), you MUST use the appropriate tool. Do NOT answer from your own knowledge.
 
 Available tools:
 {chr(10).join(desc_parts)}
@@ -59,15 +58,66 @@ User: Hello
 Assistant: Hello! How can I help you today?"""
 
 
-def _validate_tool_calls(
-    tool_calls: List[dict], valid_names: set
-) -> Optional[List[dict]]:
-    """验证并标准化工具调用"""
+def parse_tool_calls(content: str) -> Optional[List[dict]]:
+    """
+    从响应内容中解析工具调用
+    参考 go-proxy 的实现：查找 tool_calls 关键字，然后用括号匹配找到完整 JSON
+    """
+    if not content:
+        return None
+
+    # 查找 tool_calls 关键字
+    idx = content.find("tool_calls")
+    if idx < 0:
+        return None
+
+    # 向前找到最近的 {
+    start = content.rfind("{", 0, idx)
+    if start < 0:
+        return None
+
+    # 用括号匹配找到完整的 JSON
+    depth = 0
+    end = -1
+    for i in range(start, len(content)):
+        if content[i] == "{":
+            depth += 1
+        elif content[i] == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+
+    if end < 0:
+        return None
+
+    raw = content[start:end]
+
+    # 尝试解析 JSON
+    parsed = None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        # 尝试修复常见的 JSON 错误
+        # 1. 单引号替换为双引号
+        fixed = raw.replace("'", '"')
+        # 2. 键添加引号
+        fixed = re.sub(r'(?:(\w+)\s*:)', r'"\1":', fixed)
+        try:
+            parsed = json.loads(fixed)
+        except json.JSONDecodeError:
+            return None
+
+    if not parsed or "tool_calls" not in parsed:
+        return None
+
+    tool_calls = parsed["tool_calls"]
     if not isinstance(tool_calls, list) or len(tool_calls) == 0:
         return None
 
+    # 转换为 OpenAI 格式
     result = []
-    for tc in tool_calls:
+    for i, tc in enumerate(tool_calls):
         if not isinstance(tc, dict):
             continue
 
@@ -75,152 +125,39 @@ def _validate_tool_calls(
         if not name:
             continue
 
-        # 如果提供了 valid_names，检查工具名是否有效
-        # 如果没有提供 valid_names，接受任何工具名
-        if valid_names and name not in valid_names:
-            logger.warning(f"Tool name not in available list: {name}")
-            # 仍然接受，只是警告
-
         arguments = tc.get("arguments", {})
         if isinstance(arguments, str):
-            # 尝试解析 JSON 字符串
-            try:
-                arguments = json.loads(arguments)
-            except json.JSONDecodeError:
-                arguments = {}
-        elif not isinstance(arguments, dict):
-            arguments = {}
+            args_str = arguments
+        else:
+            args_str = json.dumps(arguments, ensure_ascii=False)
 
-        result.append(
-            {
-                "id": generate_tool_call_id(),
-                "type": "function",
-                "function": {"name": name, "arguments": json.dumps(arguments, ensure_ascii=False)},
-            }
-        )
+        result.append({
+            "id": f"call_{uuid.uuid4().hex[:24]}",
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": args_str,
+            },
+        })
 
     return result if result else None
-
-
-def _find_json_in_text(text: str) -> Optional[dict]:
-    """在文本中查找 JSON 对象"""
-    # 尝试查找 {"tool_calls" 或 {"tool_calls"
-    patterns = ['{"tool_calls"', '{" tool_calls"']
-
-    for pattern in patterns:
-        start = text.find(pattern)
-        if start < 0:
-            continue
-
-        # 用括号匹配找到完整的 JSON
-        depth = 0
-        for i in range(start, len(text)):
-            if text[i] == "{":
-                depth += 1
-            elif text[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        return json.loads(text[start : i + 1])
-                    except json.JSONDecodeError:
-                        # 尝试修复常见的 JSON 错误
-                        raw = text[start : i + 1]
-                        # 修复单引号
-                        raw = raw.replace("'", '"')
-                        # 修复缺少引号的键
-                        raw = re.sub(r"(?<=[{,])\s*(\w+)\s*:", r'"\1":', raw)
-                        try:
-                            return json.loads(raw)
-                        except json.JSONDecodeError:
-                            break
-
-    return None
-
-
-def parse_tool_calls(
-    content: str, valid_names: Optional[set] = None
-) -> Optional[List[dict]]:
-    """
-    从响应内容中解析工具调用
-
-    支持的格式:
-    1. 纯 JSON: {"tool_calls":[...]}
-    2. 嵌入文本中的 JSON
-    3. 转义的 JSON 字符串
-
-    返回: 工具调用列表，或 None（如果没有工具调用）
-    """
-    if not content or not content.strip():
-        return None
-
-    content = content.strip()
-
-    # 1. 尝试直接解析整个内容
-    try:
-        data = json.loads(content)
-        if isinstance(data, dict) and "tool_calls" in data:
-            return _validate_tool_calls(data["tool_calls"], valid_names or set())
-    except json.JSONDecodeError:
-        pass
-
-    # 2. 尝试解析转义的 JSON 字符串
-    try:
-        # 处理 {"tool_calls":"[{...}]"} 的情况
-        if content.startswith('"') and content.endswith('"'):
-            unescaped = json.loads(content)
-            if isinstance(unescaped, str):
-                data = json.loads(unescaped)
-                if isinstance(data, dict) and "tool_calls" in data:
-                    return _validate_tool_calls(data["tool_calls"], valid_names or set())
-    except (json.JSONDecodeError, TypeError):
-        pass
-
-    # 3. 尝试在文本中查找 JSON
-    data = _find_json_in_text(content)
-    if data and "tool_calls" in data:
-        return _validate_tool_calls(data["tool_calls"], valid_names or set())
-
-    return None
-
-
-def extract_text_without_tool_calls(content: str) -> str:
-    """提取文本内容，移除工具调用 JSON"""
-    if not content:
-        return ""
-
-    # 查找工具调用 JSON
-    data = _find_json_in_text(content)
-    if data and "tool_calls" in data:
-        # 移除 JSON 部分，保留其他文本
-        json_str = json.dumps(data, ensure_ascii=False)
-        text = content.replace(json_str, "").strip()
-        return text if text else ""
-
-    return content
 
 
 class OpenAIToolCallParser:
     """
     OpenAI 格式的工具调用解析器
-    用于流式和非流式响应
+    参考 go-proxy 的流式处理方式：缓冲所有内容，在结束时才解析
     """
 
     def __init__(self, tools: Optional[List[dict]] = None):
         self.tools = tools or []
-        self.tool_names = set()
-        for tool in self.tools:
-            fn = tool.get("function", {})
-            if fn.get("name"):
-                self.tool_names.add(fn["name"])
-
-        self.buffer = ""
         self.has_tools = len(self.tools) > 0
+        self.buffer = ""
         self.tool_call_detected = False
 
     def feed(self, text: str) -> Optional[List[dict]]:
         """
         喂入文本，尝试检测工具调用
-
         返回: 工具调用列表，或 None（还在缓冲中）
         """
         if not self.has_tools:
@@ -228,17 +165,13 @@ class OpenAIToolCallParser:
 
         self.buffer += text
 
-        # 检查是否包含工具调用特征
-        if '{"tool_calls"' in self.buffer or '{"tool_calls"' in self.buffer:
-            self.tool_call_detected = True
-
-        # 检查是否有转义的 JSON（模型可能返回 JSON 字符串）
-        if '{\\"tool_calls\\"' in self.buffer or '{"tool_calls"' in self.buffer:
+        # 检查是否包含 tool_calls 关键字
+        if "tool_calls" in self.buffer:
             self.tool_call_detected = True
 
         # 如果检测到工具调用特征，尝试解析
         if self.tool_call_detected:
-            tool_calls = parse_tool_calls(self.buffer, self.tool_names)
+            tool_calls = parse_tool_calls(self.buffer)
             if tool_calls:
                 return tool_calls
 
@@ -247,16 +180,13 @@ class OpenAIToolCallParser:
     def finish(self) -> tuple[str, Optional[List[dict]]]:
         """
         结束解析
-
         返回: (文本内容, 工具调用列表)
-        - 如果有工具调用，文本内容为空
-        - 如果没有工具调用，工具调用列表为 None
         """
         if not self.buffer:
             return "", None
 
         if self.tool_call_detected:
-            tool_calls = parse_tool_calls(self.buffer, self.tool_names)
+            tool_calls = parse_tool_calls(self.buffer)
             if tool_calls:
                 return "", tool_calls
 
