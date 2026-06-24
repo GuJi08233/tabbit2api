@@ -2,9 +2,12 @@ import json
 import time
 import uuid
 import logging
+import asyncio
+import re
 from typing import Any, Optional, List, Dict
+from collections import deque
 
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -36,9 +39,59 @@ def init(token_manager: TokenManager, config: ConfigManager, log_store: LogStore
     _logs = log_store
 
 
-import re
+# ── JSON 缓冲池（借鉴 cursor2api-go 的 jsonBufferPool）──────
+
+class _JsonBufferPool:
+    """复用 JSON 序列化缓冲区，减少内存分配"""
+    def __init__(self, max_size: int = 32):
+        self._pool: deque[str] = deque(maxlen=max_size)
+
+    def get(self) -> list:
+        return []
+
+    def put(self, buf: list):
+        buf.clear()
+
+_json_pool = _JsonBufferPool()
+
+
+# ── SSE 辅助函数 ──────────────────────────────────────────
+
+def _sse_event(data: dict) -> str:
+    """格式化 SSE 事件"""
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _chat_chunk(completion_id: str, model: str, delta: dict, finish_reason: str | None = None) -> str:
+    """生成 chat completion chunk"""
+    return _sse_event({
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "choices": [{
+            "index": 0,
+            "delta": delta,
+            "finish_reason": finish_reason,
+        }],
+    })
+
+
+def _chat_error(completion_id: str, model: str, error_msg: str) -> str:
+    """生成错误 chunk"""
+    return _sse_event({
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "choices": [{
+            "index": 0,
+            "delta": {"content": f"\n\n[Error: {error_msg}]"},
+            "finish_reason": "stop",
+        }],
+    })
+
+
+# ── 文本清理函数 ──────────────────────────────────────────
 
 def _clean_text(text: str) -> str:
+    """清理文本中的特殊标签"""
     text = re.sub(r'<system-reminder>.*?</system-reminder>', '', text, flags=re.DOTALL)
     text = re.sub(r'<user_input>.*?</user_input>', '', text, flags=re.DOTALL)
     text = re.sub(r'<env>.*?</env>', '', text, flags=re.DOTALL)
@@ -51,14 +104,14 @@ def _clean_text(text: str) -> str:
     text = re.sub(r'<goal>.*?</goal>', '', text, flags=re.DOTALL)
     text = re.sub(r'<thought>.*?</thought>', '', text, flags=re.DOTALL)
     text = re.sub(r'<content>.*?</content>', '', text, flags=re.DOTALL)
-    
     text = re.sub(r'<[^>]+>', '', text)
     text = re.sub(r'\n+', '\n', text)
     text = re.sub(r'^\s+|\s+$', '', text)
-    
     return text
 
+
 def _normalize_content(content) -> str:
+    """规范化内容"""
     if isinstance(content, str):
         return _clean_text(content)
     elif isinstance(content, list):
@@ -179,16 +232,36 @@ async def _get_client_and_token(authorization: str | None) -> tuple[TabbitClient
     return _fallback_clients[token], "bearer", ""
 
 
-async def _stream_handler(client, session_id, content, tabbit_model, req_model, completion_id, token_name, token_id, tools=None):
+async def _stream_handler(
+    request: Request,
+    client: TabbitClient,
+    session_id: str,
+    content: str,
+    tabbit_model: str,
+    req_model: str,
+    completion_id: str,
+    token_name: str,
+    token_id: str,
+    tools: list | None = None,
+):
+    """流式聊天完成处理器 - 借鉴 cursor2api-go 的安全包装器模式"""
     start = time.time()
     error_msg = ""
+    finished = False  # 防止重复发送 finish_reason
     tool_parser = OpenAIToolCallParser(tools)
 
     try:
-        yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': ''}, 'finish_reason': None}]})}\n\n"
+        # 发送角色 chunk
+        yield _chat_chunk(completion_id, req_model, {"role": "assistant", "content": ""})
 
         async for event in client.send_message(session_id, content, tabbit_model):
+            # 检测客户端断开
+            if await request.is_disconnected():
+                logger.debug("Client disconnected during streaming")
+                break
+
             et, ed = event["event"], event["data"]
+
             if et == "message_chunk" and "content" in ed:
                 text = ed["content"]
 
@@ -196,41 +269,62 @@ async def _stream_handler(client, session_id, content, tabbit_model, req_model, 
                 tool_calls = tool_parser.feed(text)
 
                 if tool_calls:
-                    # 检测到工具调用，发送 tool_calls 块
-                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {'tool_calls': tool_calls}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
-                    # 发送结束标记
-                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'tool_calls'}]})}\n\n"
+                    # 检测到工具调用
+                    yield _chat_chunk(completion_id, req_model, {"tool_calls": tool_calls})
+                    yield _chat_chunk(completion_id, req_model, {}, "tool_calls")
+                    finished = True
                     break
                 elif not tool_parser.is_buffering:
                     # 没有工具或不在缓冲模式，直接发送文本
-                    chunk = {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}],
-                    }
-                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                    yield _chat_chunk(completion_id, req_model, {"content": text})
+
             elif et in ("message_finish", "finish"):
+                if finished:
+                    continue  # 避免重复发送
+
                 # 流结束，检查是否有缓冲的工具调用
                 text_content, tool_calls = tool_parser.finish()
+
                 if tool_calls:
-                    # 发送工具调用
-                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {'tool_calls': tool_calls}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
-                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'tool_calls'}]})}\n\n"
+                    yield _chat_chunk(completion_id, req_model, {"tool_calls": tool_calls})
+                    yield _chat_chunk(completion_id, req_model, {}, "tool_calls")
                 elif text_content:
-                    # 发送剩余文本
-                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {'content': text_content}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
-                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
+                    yield _chat_chunk(completion_id, req_model, {"content": text_content})
+                    yield _chat_chunk(completion_id, req_model, {}, "stop")
                 else:
-                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})}\n\n"
+                    yield _chat_chunk(completion_id, req_model, {}, "stop")
+
+                finished = True
+
+            elif et == "error":
+                error_text = ed.get("message", "Unknown error")
+                logger.error(f"Tabbit stream error: {error_text}")
+                yield _chat_error(completion_id, req_model, error_text)
+                finished = True
+                break
+
+        # 确保发送结束标记（如果还没有发送）
+        if not finished:
+            yield _chat_chunk(completion_id, req_model, {}, "stop")
 
         yield "data: [DONE]\n\n"
+
         if token_id:
             _tm.report_success(token_id)
+
+    except asyncio.CancelledError:
+        logger.debug("Stream cancelled by client")
     except Exception as e:
         error_msg = str(e)
+        logger.error(f"Stream error: {error_msg}", exc_info=True)
         if token_id:
             _tm.report_error(token_id)
-        raise
+        # 发送错误信息给客户端
+        try:
+            yield _chat_error(completion_id, req_model, error_msg)
+            yield "data: [DONE]\n\n"
+        except:
+            pass
     finally:
         duration = time.time() - start
         _logs.add(LogEntry(
@@ -242,7 +336,9 @@ async def _stream_handler(client, session_id, content, tabbit_model, req_model, 
 
 @router.post("/v1/chat/completions")
 async def chat_completions(
-    req: ChatCompletionRequest | SimpleChatRequest, authorization: str = Header(None)
+    request: Request,
+    req: ChatCompletionRequest | SimpleChatRequest,
+    authorization: str = Header(None),
 ):
     try:
         client, token_name, token_id = await _get_client_and_token(authorization)
@@ -277,10 +373,19 @@ async def chat_completions(
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
 
     if getattr(req, 'stream', False):
-        return StreamingResponse(_stream_handler(
-            client, session_id, content, tabbit_model, getattr(req, 'model', 'unknown'),
-            completion_id, token_name, token_id, tools
-        ), media_type="text/event-stream")
+        return StreamingResponse(
+            _stream_handler(
+                request, client, session_id, content, tabbit_model,
+                getattr(req, 'model', 'unknown'), completion_id,
+                token_name, token_id, tools
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # 禁用 nginx 缓冲
+            },
+        )
 
     # 非流式处理
     start = time.time()
